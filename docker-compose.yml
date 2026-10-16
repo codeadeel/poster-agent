@@ -1,0 +1,58 @@
+# docker compose up --build
+#
+#   backend  the fake poster service      http://localhost:8000  (docs at /docs)
+#   mcp      the MCP server (HTTP)        http://localhost:8001/mcp
+#   jupyter  JupyterLab with the notebooks  http://localhost:8888  (published on all interfaces)
+#
+# Everything has a default. Optional settings, in your shell or a .env file next to this one:
+#   JUPYTER_TOKEN    login token for JupyterLab. Empty means no login, so set it if others can reach the port
+#   PUBLIC_HOST      address you browse from when it isn't localhost, so poster image links work (default: localhost)
+#   POSTER_API_KEY   shared secret between the MCP server and the backend (default: a demo value)
+#   OLLAMA_API_KEY   lets the agent notebook use a real model instead of the scripted one
+#   MOCK_TIME_SCALE  0.3 makes jobs take about 1.5 to 6 s, 1 is the real 5 to 20 s
+name: poster-agent-lab
+
+services:
+  backend:
+    build: { context: ., target: service }
+    environment:
+      POSTER_API_KEY: ${POSTER_API_KEY:-demo-key-change-me}
+      MOCK_PUBLIC_URL: http://${PUBLIC_HOST:-localhost}:8000
+      MOCK_TIME_SCALE: ${MOCK_TIME_SCALE:-0.3}
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mcp:
+    build: { context: ., target: service }
+    command: ["python", "-m", "mcp_server", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      POSTER_API_KEY: ${POSTER_API_KEY:-demo-key-change-me}
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend: { condition: service_healthy }
+    ports: ["8001:8001"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8001), 2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  jupyter:
+    build: { context: ., target: lab }
+    environment:
+      MCP_URL: http://mcp:8001/mcp
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+    depends_on:
+      mcp: { condition: service_healthy }
+    ports: ["8888:8888"]
+    volumes: ["./lab:/app/lab"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/api')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
